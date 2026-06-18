@@ -1,0 +1,8 @@
+node_modules
+out
+dist
+release
+*.local
+*.log
+mini-mode-screenshot*.png
+normal-after-button.png
