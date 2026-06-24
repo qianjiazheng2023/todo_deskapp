@@ -28,10 +28,30 @@ export interface TodoApi {
   remove: (id: string) => Promise<string>
 }
 
+export interface MarkdownNote {
+  id: string
+  title: string
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type MarkdownNoteInput = Pick<MarkdownNote, 'title'> & Partial<Pick<MarkdownNote, 'content'>>
+
+export type MarkdownNotePatch = Partial<Pick<MarkdownNote, 'title' | 'content'>>
+
+export interface MarkdownNoteApi {
+  list: () => Promise<MarkdownNote[]>
+  create: (input: MarkdownNoteInput) => Promise<MarkdownNote>
+  update: (id: string, patch: MarkdownNotePatch) => Promise<MarkdownNote>
+  remove: (id: string) => Promise<string>
+}
+
 export interface WindowApi {
   setCompactMode: (compact: boolean) => Promise<boolean>
 }
 
 export interface TodoStoreFile {
   todos: Todo[]
+  notes?: MarkdownNote[]
 }

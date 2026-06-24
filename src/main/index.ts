@@ -4,6 +4,9 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   allowedTags,
+  type MarkdownNote,
+  type MarkdownNoteInput,
+  type MarkdownNotePatch,
   type Priority,
   type Todo,
   type TodoInput,
@@ -84,11 +87,16 @@ const registerWindowHandlers = (): void => {
 
 const dataFilePath = (): string => join(app.getPath('userData'), dataFileName)
 
-const emptyStore = (): TodoStoreFile => ({ todos: [] })
+const emptyStore = (): TodoStoreFile => ({ todos: [], notes: [] })
 
 const isStoreFile = (value: unknown): value is TodoStoreFile => {
   return Boolean(value && typeof value === 'object' && Array.isArray((value as TodoStoreFile).todos))
 }
+
+const normalizeStore = (store: TodoStoreFile): TodoStoreFile => ({
+  todos: store.todos,
+  notes: Array.isArray(store.notes) ? store.notes : []
+})
 
 const findFirstJsonObject = (raw: string): string | null => {
   let depth = 0
@@ -139,7 +147,7 @@ const readStore = async (): Promise<TodoStoreFile> => {
   try {
     const raw = await fs.readFile(path, 'utf-8')
     const parsed = JSON.parse(raw) as unknown
-    return isStoreFile(parsed) ? parsed : emptyStore()
+    return isStoreFile(parsed) ? normalizeStore(parsed) : emptyStore()
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT') {
@@ -152,9 +160,10 @@ const readStore = async (): Promise<TodoStoreFile> => {
     if (recoveredJson) {
       const recovered = JSON.parse(recoveredJson) as unknown
       if (isStoreFile(recovered)) {
+        const normalized = normalizeStore(recovered)
         await backupCorruptStore(path, raw)
-        await writeStore(recovered)
-        return recovered
+        await writeStore(normalized)
+        return normalized
       }
     }
 
@@ -228,6 +237,19 @@ const cleanTitle = (title: string): string => {
   }
 
   return cleaned
+}
+
+const cleanNoteTitle = (title: string): string => {
+  const cleaned = title.trim()
+  if (!cleaned) {
+    throw new Error('Note title is required.')
+  }
+
+  return cleaned
+}
+
+const sortNotes = (notes: MarkdownNote[]): MarkdownNote[] => {
+  return [...notes].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
 const registerTodoHandlers = (): void => {
@@ -305,7 +327,74 @@ const registerTodoHandlers = (): void => {
       assertWritableDate(current.date)
       const nextTodos = store.todos.filter((todo) => todo.id !== id)
 
-      await writeStore({ todos: nextTodos })
+      await writeStore({ ...store, todos: nextTodos })
+      return id
+    })
+  })
+}
+
+const registerNoteHandlers = (): void => {
+  ipcMain.handle('notes:list', async () => {
+    return withStoreLock(async () => {
+      const store = await readStore()
+      return sortNotes(store.notes ?? [])
+    })
+  })
+
+  ipcMain.handle('notes:create', async (_event, input: MarkdownNoteInput) => {
+    return withStoreLock(async () => {
+      const store = await readStore()
+      const now = new Date().toISOString()
+      const note: MarkdownNote = {
+        id: randomUUID(),
+        title: cleanNoteTitle(input.title),
+        content: input.content ?? '',
+        createdAt: now,
+        updatedAt: now
+      }
+
+      store.notes = [note, ...(store.notes ?? [])]
+      await writeStore(store)
+      return note
+    })
+  })
+
+  ipcMain.handle('notes:update', async (_event, id: string, patch: MarkdownNotePatch) => {
+    return withStoreLock(async () => {
+      const store = await readStore()
+      const notes = store.notes ?? []
+      const index = notes.findIndex((note) => note.id === id)
+
+      if (index === -1) {
+        throw new Error('Note was not found.')
+      }
+
+      const current = notes[index]
+      const next: MarkdownNote = {
+        ...current,
+        title: patch.title === undefined ? current.title : cleanNoteTitle(patch.title),
+        content: patch.content === undefined ? current.content : patch.content,
+        updatedAt: new Date().toISOString()
+      }
+
+      notes[index] = next
+      store.notes = notes
+      await writeStore(store)
+      return next
+    })
+  })
+
+  ipcMain.handle('notes:remove', async (_event, id: string) => {
+    return withStoreLock(async () => {
+      const store = await readStore()
+      const notes = store.notes ?? []
+
+      if (!notes.some((note) => note.id === id)) {
+        throw new Error('Note was not found.')
+      }
+
+      store.notes = notes.filter((note) => note.id !== id)
+      await writeStore(store)
       return id
     })
   })
@@ -315,6 +404,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   registerWindowHandlers()
   registerTodoHandlers()
+  registerNoteHandlers()
   createWindow()
 
   app.on('activate', () => {
